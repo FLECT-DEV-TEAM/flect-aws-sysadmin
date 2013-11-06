@@ -60,7 +60,7 @@ sub create_images {
             'create-image' => {
                 'instance_id' => $is->{InstanceId},
                 'name'        => 'autobackup-' . $yyyymmdd . '-' . $name,
-                'no-reboot'   => 'true',
+                'no-reboot'   => '',
             },
             timeout => 18,    # optional. default is 30 seconds
         );
