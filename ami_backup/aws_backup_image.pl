@@ -58,8 +58,9 @@ sub create_images {
         my $name = get_instance_name($is);
         my $res  = $aws->ec2(
             'create-image' => {
-                instance_id => $is->{InstanceId},
-                name        => 'autobackup-' . $yyyymmdd . '-' . $name,
+                'instance_id' => $is->{InstanceId},
+                'name'        => 'autobackup-' . $yyyymmdd . '-' . $name,
+                'no-reboot'   => 'true',
             },
             timeout => 18,    # optional. default is 30 seconds
         );
