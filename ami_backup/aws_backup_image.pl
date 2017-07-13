@@ -55,9 +55,9 @@ sub create_tags {
 
     if (!defined($ENV{'COST_ALLOCATION_TAG'})) {
         syslog( 'info', "ENV:COST_ALLOCATION_TAG does not defined. processing of create_tag skipped." );
-		return;
+        return;
     }
-	my $tagname = $ENV{'COST_ALLOCATION_TAG'};
+    my $tagname = $ENV{'COST_ALLOCATION_TAG'};
     my $tagvalue = get_tag_value($is, $tagname);
 
     if ($tagvalue ne '') {
