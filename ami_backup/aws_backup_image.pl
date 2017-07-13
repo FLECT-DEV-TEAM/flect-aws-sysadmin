@@ -10,11 +10,12 @@ use Time::Piece;
 
 our $aws = AWS::CLIWrapper->new();
 
-sub get_instance_name {
+sub get_tag_value {
     my $is = shift;
+    my $tagname = shift;
 
     for my $tag ( @{ $is->{Tags} } ) {
-        if ( $tag->{Key} eq 'Name' ) {
+        if ( $tag->{Key} eq $tagname ) {
             return $tag->{Value};
         }
     }
@@ -48,6 +49,42 @@ sub get_instances {
     return @instances;
 }
 
+sub create_tags {
+    my $is = shift;
+    my $imageid = shift;
+
+    if (!defined($ENV{'COST_ALLOCATION_TAG'})) {
+        syslog( 'info', "ENV:COST_ALLOCATION_TAG does not defined. processing of create_tag skipped." );
+		return;
+    }
+	my $tagname = $ENV{'COST_ALLOCATION_TAG'};
+    my $tagvalue = get_tag_value($is, $tagname);
+
+    if ($tagvalue ne '') {
+        my $res  = $aws->ec2(
+            'create-tags' => {
+                'resources'   => $imageid,
+                'tags'        => [{
+                                     Key   => $tagname,
+                                     Value => $tagvalue
+                                 }],
+            },
+            timeout => 18,    # optional. default is 30 seconds
+        );
+
+        if ($res) {
+            syslog( 'info', "create tags suceeded imageid=$imageid" );
+        }
+        else {
+            syslog( 'err',
+                "create tags failed imageid=$imageid, code="
+                . $AWS::CLIWrapper::Error->{Code}
+                . ', message='
+                . $AWS::CLIWrapper::Error->{Message} );
+        }
+    }
+}
+
 sub create_images {
     my @instances = @_;
 
@@ -55,7 +92,7 @@ sub create_images {
     my $yyyymmdd = $t->strftime('%Y-%m-%d');
 
     for my $is (@instances) {
-        my $name = get_instance_name($is);
+        my $name = get_tag_value($is, 'Name');
         my $res  = $aws->ec2(
             'create-image' => {
                 'instance_id' => $is->{InstanceId},
@@ -66,6 +103,7 @@ sub create_images {
         );
         if ($res) {
             syslog( 'info', "create image suceeded name=$name" );
+            create_tags($is, $res->{ImageId});
         }
         else {
             syslog( 'err',
