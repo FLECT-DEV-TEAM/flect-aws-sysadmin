@@ -20,14 +20,18 @@ sub get_tag_value {
         }
     }
 
-    return $is->{InstanceId};
+    if ( $tagname eq 'Name' ) {
+        return $is->{InstanceId};
+    }
+
+    return '';
 }
 
 sub get_instances {
     my @instances = ();
 
     my $res = $aws->ec2(
-        'describe-instances' => {},
+        'describe-instances' => {'filters' => [{ name => "tag:$ENV{'BACKUP_TAG'}", values => ["1*","2*","3*","4*","5*","6*","7*","8*","9*"] }],},
         timeout              => 18,    # optional. default is 30 seconds
     );
 
@@ -49,38 +53,60 @@ sub get_instances {
     return @instances;
 }
 
-sub create_tags {
+sub get_tags {
     my $is = shift;
-    my $imageid = shift;
 
+    my @tags = ();
+
+    # COST_ALLOCATION_TAG
     if (!defined($ENV{'COST_ALLOCATION_TAG'})) {
         syslog( 'info', "ENV:COST_ALLOCATION_TAG does not defined. processing of create_tag skipped." );
-        return;
-    }
-    my $tagname = $ENV{'COST_ALLOCATION_TAG'};
-    my $tagvalue = get_tag_value($is, $tagname);
-
-    if ($tagvalue ne '') {
-        my $res  = $aws->ec2(
-            'create-tags' => {
-                'resources'   => $imageid,
-                'tags'        => [{
-                                     Key   => $tagname,
-                                     Value => $tagvalue
-                                 }],
-            },
-            timeout => 18,    # optional. default is 30 seconds
+    } else {
+        push( @tags, {
+                    Key => $ENV{'COST_ALLOCATION_TAG'},
+                    Value => get_tag_value($is, $ENV{'COST_ALLOCATION_TAG'})
+                }
         );
+    }
 
-        if ($res) {
-            syslog( 'info', "create tags suceeded imageid=$imageid" );
-        }
-        else {
-            syslog( 'err',
-                "create tags failed imageid=$imageid, code="
-                . $AWS::CLIWrapper::Error->{Code}
-                . ', message='
-                . $AWS::CLIWrapper::Error->{Message} );
+    # BACKUP_DAYS_TAG
+    push( @tags, {
+                Key => $ENV{'BACKUP_TAG'},
+                Value => get_tag_value($is, $ENV{'BACKUP_TAG'})
+            }
+    );
+
+    return @tags;
+}
+
+
+sub create_tags {
+    my $imageid = shift;
+    my @tags = @_;
+
+    for my $tag (@tags) {
+        if ($tag->{Value} ne '') {
+            my $res  = $aws->ec2(
+                'create-tags' => {
+                    'resources'   => $imageid,
+                    'tags'        => [{
+                                         Key   => $tag->{Key},
+                                         Value => $tag->{Value}
+                                    }],
+                },
+                timeout => 18,    # optional. default is 30 seconds
+            );
+
+            if ($res) {
+                syslog( 'info', "create tags suceeded imageid=$imageid, tag=$tag->{Key}" );
+            }
+            else {
+                syslog( 'err',
+                    "create tags failed imageid=$imageid, tag=$tag->{Key} code="
+                    . $AWS::CLIWrapper::Error->{Code}
+                    . ', message='
+                    . $AWS::CLIWrapper::Error->{Message} );
+            }
         }
     }
 }
@@ -103,7 +129,7 @@ sub create_images {
         );
         if ($res) {
             syslog( 'info', "create image suceeded name=$name" );
-            create_tags($is, $res->{ImageId});
+            create_tags($res->{ImageId}, get_tags($is));
         }
         else {
             syslog( 'err',
