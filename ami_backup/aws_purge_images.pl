@@ -9,49 +9,28 @@ use Sys::Syslog qw(:DEFAULT setlogsock);
 use Time::Piece;
 use Time::Seconds;
 
-use constant BACKUP_DAYS => 5;
+use constant TIME_DIFFERENCE_JST => 9;
 
 our $aws = AWS::CLIWrapper->new();
 
-sub get_instance_name {
+sub get_tag_value {
     my $is = shift;
+    my $tagname = shift;
 
     for my $tag ( @{ $is->{Tags} } ) {
-        if ( $tag->{Key} eq 'Name' ) {
+        if ( $tag->{Key} eq $tagname ) {
             return $tag->{Value};
         }
     }
 
-    return $is->{InstanceId};
-}
-
-sub get_instances {
-    my @instances = ();
-
-    my $res = $aws->ec2(
-        'describe-instances' => {},
-        timeout              => 18,    # optional. default is 30 seconds
-    );
-
-    if ($res) {
-        for my $rs ( @{ $res->{Reservations} } ) {
-            for my $is ( @{ $rs->{Instances} } ) {
-                push( @instances, $is );
-            }
-        }
-    }
-    else {
-        syslog( 'err',
-                "describe instances failed, code="
-              . $AWS::CLIWrapper::Error->{Code}
-              . ', message='
-              . $AWS::CLIWrapper::Error->{Message} );
+    if ( $tagname eq 'Name' ) {
+        return $is->{InstanceId};
     }
 
-    return @instances;
+    return '';
 }
 
-sub get_shnapshot_id {
+sub get_snapshot_id {
     my $image = shift;
 
     if ( $image->{RootDeviceType} eq 'ebs' ) {
@@ -66,12 +45,21 @@ sub get_shnapshot_id {
 
 sub is_image_for_purge {
     my $image     = shift;
-    my @instances = @_;
 
-    my $t = localtime() - ( ONE_DAY * BACKUP_DAYS );
+    my $backup_days = get_tag_value($image, $ENV{'BACKUP_TAG'});
+
+    if ( !($backup_days =~ /^[0-9]+$/) ) {
+        syslog( 'warn',
+            "NumberFormatError: Tag:$ENV{'BACKUP_TAG'} For input string. image_id=" . $image->{ImageId} . "Value = " . $backup_days );
+        return;
+    }
+
+    # JST -> UTC
+    my $t = localtime() - ( ONE_DAY * $backup_days ) - ( ONE_HOUR * TIME_DIFFERENCE_JST );
     my $purge_date = $t->strftime('%Y%m%d');
 
-    if ( $image->{Name} =~ m/autobackup-(\d{4}+-\d{2}+-\d{2}+).+/ ) {
+    # CreationDate > UTC
+    if ( $image->{CreationDate} =~ m/(\d{4}+-\d{2}+-\d{2}+).+/) {
         my $backedup_date = $1;
         $backedup_date =~ s/-//g;
 
@@ -79,12 +67,7 @@ sub is_image_for_purge {
             return;
         }
 
-        for my $is (@instances) {
-            my $name = get_instance_name($is);
-            if ( index( $image->{Name}, $name ) != -1 ) {
-                return 1;
-            }
-        }
+        return 1;
 
     }
     else {
@@ -93,21 +76,19 @@ sub is_image_for_purge {
 }
 
 sub get_backedup_images {
-    my @instances = @_;
-
     my @images = ();
 
     my $res = $aws->ec2(
         'describe-images' => {
             owners  => 'self',
-            filters => 'Name=name,Values=*',
+            filters => [{ name => "tag:$ENV{'BACKUP_TAG'}", values => ["1*","2*","3*","4*","5*","6*","7*","8*","9*"] }]
         },
         timeout => 18,    # optional. default is 30 seconds
     );
 
     if ($res) {
         for my $im ( @{ $res->{Images} } ) {
-            if ( is_image_for_purge( $im, @instances ) ) {
+            if ( is_image_for_purge( $im ) ) {
                 push( @images, $im );
             }
         }
@@ -127,7 +108,7 @@ sub get_backedup_images {
 sub purge_image {
     my $image = shift;
 
-    my $snapshot_id = get_shnapshot_id($image);
+    my $snapshot_id = get_snapshot_id($image);
 
     my $res = $aws->ec2(
         'deregister-image' => {
@@ -173,12 +154,7 @@ sub purge_image {
 }
 
 sub purge_images {
-    my @instances = @_;
-
-    my @images = get_backedup_images(@instances);
-
-    my $t        = localtime;
-    my $yyyymmdd = $t->strftime('%Y-%m-%d');
+    my @images = get_backedup_images();
 
     for my $im (@images) {
         purge_image($im);
@@ -193,7 +169,7 @@ sub main {
 
     openlog( __FILE__, 'pid', 'local6' );
 
-    purge_images( get_instances() );
+    purge_images();
 
     closelog();
 }
@@ -201,3 +177,4 @@ sub main {
 main();
 
 1;
+
